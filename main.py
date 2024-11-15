@@ -5,9 +5,15 @@ from parameter_manager import ParameterManager
 from colors import BLACK, RED, YELLOW, BLUE, GREEN, MAGENTA, GRAY, BACKGROUNDCOLOR, DARKGREEN, SCREENGREEN
 import os
 import json
+import datetime
+import csv
+import time
+
+# Get the current directory of the Python file
+current_dir = os.path.dirname(__file__)
 
 CHANNEL_COLORS = [GREEN, YELLOW, RED, MAGENTA]
-CHANNEL_NAMES = ["Jef", "Du Bin", "Ward", "Schoeters"]
+CHANNEL_NAMES = ["STROOM", "BAT 1", "BAT 2", "MOTOR"]
 
 # Functie om parameters uit een bestand te lezen
 def read_parameters(file_path):
@@ -32,13 +38,12 @@ on_image_path = os.path.join(current_dir, image_folder, 'SSL_Button_ON.png')
 off_image_path = os.path.join(current_dir, image_folder, 'SSL_Button_OFF.png')
 
 # Set the path to your font file
-lcd_font_path = "C:/Users/guy.buys/PycharmProjects/SerialCommunicationDisplay/fonts/LCD-Solid/LCD_Solid.ttf"
-led_font_path = "C:/Users/guy.buys/PycharmProjects/SerialCommunicationDisplay/fonts/ds_digital/DS-DIGII.TTF"
-# ls7_font_path = "C:/Users/guy.buys/PycharmProjects/SerialCommunicationDisplay/fonts/Segment7/Segment7Standard.otf"
-# dymo_font_path = ("C:/Users/guy.buys/PycharmProjects/SerialCommunicationDisplay/fonts/dymo_grunge_bubble"
-#                  "/Dymo Grunge Bubble.ttf")
-sharpie_font_path = ("C:/Users/guy.buys/PycharmProjects/SerialCommunicationDisplay/fonts/permanent-marker-font"
-                     "/PermanentMarker-x99j.ttf")
+lcd_font_path = os.path.join(current_dir, 'fonts', 'LCD-Solid', 'LCD_Solid.ttf')
+led_font_path = os.path.join(current_dir, 'fonts', 'ds_digital', 'DS-DIGII.TTF')
+# ls7_font_path = os.path.join(current_dir, 'fonts', 'Segment7', 'Segment7Standard.otf')
+# dymo_font_path = os.path.join(current_dir, 'fonts', 'dymo_grunge_bubble', 'Dymo Grunge Bubble.ttf')
+sharpie_font_path = os.path.join(current_dir, 'fonts', 'permanent-marker-font', 'PermanentMarker-x99j.ttf')
+
 serial_connected = False
 
 # Define constants for window dimensions
@@ -49,6 +54,13 @@ serial_connected = False
 PID_TARGET_OFFSET = 1
 TOLERANCE_RANGE = 1
 
+# Initialize the contacts variable
+contacts = 0
+
+# Initialize the recording variables
+recording = False
+rec_time = 0
+last_time = time.time()
 
 def get_param_value(name, pm, ttx, trx):
     parameter_name, parameter_value = pm.get_parameter(name)
@@ -117,6 +129,8 @@ def main():
     adc1 = 0
     adc2 = 0
     adc3 = 0
+    res_values = {}
+
 
     # callback functions
     def button_callback(state):
@@ -133,6 +147,24 @@ def main():
             my_scope.set_time_scale(-1)
         else:
             my_scope.set_time_scale(0)
+
+    def contact_button_callback(index, state):
+        global contacts
+        if state:
+            contacts |= (1 << index)  # Set the bit at position index
+        else:
+            contacts &= ~(1 << index)  # Clear the bit at position index
+
+        terminal_tx_window.add_message(f"contacts {contacts}", color=DARKGREEN)
+        parameter_manager.set_parameter(f"contacts {contacts}", contacts)
+
+    def button_rec_callback(state):
+        global recording, rec_time
+        if state:
+            recording = True
+            rec_time = 0
+        else:
+            recording = False
 
     def rate_callback(value):
         terminal_tx_window.add_message("rate " + str(value), color=DARKGREEN)
@@ -152,6 +184,15 @@ def main():
 
     switch_scope_speed = PushButtonPic(1300, 800, on_image_path, off_image_path, "Time x2",
                                        callback=button_fast_callback)
+    switch_rec = PushButtonPic(1400, 800, on_image_path, off_image_path, "REC", font_color=RED,
+                                       callback=button_rec_callback)
+
+    # Create an array of buttons for the contacts
+    contact_buttons = []
+    for i in range(4):
+        button = PushButtonPic(50 + i * 100, 400, on_image_path, off_image_path, f"Q{i}",
+                               callback=lambda state, idx=i: contact_button_callback(idx, state))
+        contact_buttons.append(button)
 
     label_adc0 = Label(170, 2, 'ADC0', font=sharpie_font_path, font_size=28, color=(0, 0, 0))
     label_adc1 = Label(370, 2, 'ADC1', font=sharpie_font_path, font_size=28, color=(0, 0, 0))
@@ -261,7 +302,7 @@ def main():
     my_scope.add_signal(offset=0, val_per_division=10, color=CHANNEL_COLORS[0])
     my_scope.add_signal(offset=-3, val_per_division=2, color=CHANNEL_COLORS[1])
     my_scope.add_signal(offset=-3, val_per_division=2, color=CHANNEL_COLORS[2])
-    my_scope.add_signal(offset=-3, val_per_division=2, color=CHANNEL_COLORS[3])
+    my_scope.add_signal(offset=-3, val_per_division=4, color=CHANNEL_COLORS[3])
     scope_frame_complete = False
 
     # Get values from device with parameter manager
@@ -289,6 +330,9 @@ def main():
             switch_on.handle_event(event)
             switch_scope_run.handle_event(event)
             switch_scope_speed.handle_event(event)
+            switch_rec.handle_event(event)
+            for button in contact_buttons:
+                button.handle_event(event)
             for name, text_field in text_fields.items():
                 text_field.handle_event(event)
             for name, text_field in adc_text_fields.items():
@@ -305,6 +349,9 @@ def main():
         switch_on.draw(screen)
         switch_scope_run.draw(screen)
         switch_scope_speed.draw(screen)
+        switch_rec.draw(screen)
+        for button in contact_buttons:
+            button.draw(screen)
         label_gain.draw(screen)
         label_rate.draw(screen)
         text_field_gain.draw(screen)
@@ -332,14 +379,14 @@ def main():
         if scope_frame_complete:
             scope_frame_complete = False
             if switch_scope_run.get_state():
-                if 'adc0' in locals():
-                    my_scope.add_data_to_signal(0, adc0)
-                if 'adc1' in locals():
-                    my_scope.add_data_to_signal(1, adc1)
-                if 'adc2' in locals():
-                    my_scope.add_data_to_signal(2, adc2)
-                if 'adc3' in locals():
-                    my_scope.add_data_to_signal(3, adc3)
+                if 'res0' in res_values:
+                    my_scope.add_data_to_signal(0, res_values['res0'])
+                if 'res1' in res_values:
+                    my_scope.add_data_to_signal(1, res_values['res1'])
+                if 'res2' in res_values:
+                    my_scope.add_data_to_signal(2, res_values['res2'])
+                if 'res3' in res_values:
+                    my_scope.add_data_to_signal(3, res_values['res3'])
         my_scope.draw(screen)
         pygame.display.flip()
 
@@ -366,6 +413,12 @@ def main():
                             switch_on.set_state(True)
                         else:
                             switch_on.set_state(False)
+                if parameter_name == "contacts":
+                    if parameter_value != switch_on.get_state():
+                        if parameter_value == "1":
+                            switch_on.set_state(True)
+                        else:
+                            switch_on.set_state(False)
 
                 for i in range(4):
                     adc_name = f"adc{i}"
@@ -379,11 +432,56 @@ def main():
                         a_value = parameters.get(a_name, 1)
                         b_value = parameters.get(b_name, 0)
                         scaled_value = (globals()[adc_name] - b_value)/ a_value
-
                         res_text_fields[res_name].set_value(round(scaled_value, 2))
+                        res_values[res_name] = scaled_value
                         if i == 3:
                             scope_frame_complete = True
                         break
+
+        # Check if recording is active
+        if recording:
+            global rec_time, last_time, contacts
+            current_time = time.time()
+            if current_time - last_time >= 1:
+                last_time = current_time
+
+                # Perform actions based on rec_time
+                if rec_time == 0:
+                    # Perform initial actions when recording starts
+                    print("Recording started")
+                    if contacts & 1:
+                        contacts &= ~(1)  # Clear the 1st bit
+                        terminal_tx_window.add_message(f"contacts {contacts}", color=DARKGREEN)
+                        parameter_manager.set_parameter(f"contacts {contacts}", contacts)
+                        contact_buttons[0].set_state(False)
+                    # Maak session_id en/of file aan
+                    current_time = datetime.datetime.now()
+                    file_name = current_time.strftime("recording_%Y%m%d_%H%M%S.csv")
+                    file = open(file_name, mode='w', newline='')
+                    writer = csv.writer(file)
+                    # Schrijf de header
+                    writer.writerow(["Timestamp", "Contacts", "voltage", "current"])
+                elif rec_time == 1:
+                    contacts |= 1  # Clear the 1st bit
+                    terminal_tx_window.add_message(f"contacts {contacts}", color=DARKGREEN)
+                    parameter_manager.set_parameter(f"contacts {contacts}", contacts)
+                    contact_buttons[0].set_state(True)
+
+                elif rec_time % 3599 == 0:
+                # Perform periodic actions every 100 seconds
+                    print(f"Recording time: {rec_time} seconds")
+                    rec_time = -1
+                rec_time += 1
+
+                # Write data to file
+                data = f"Data at {rec_time} seconds"
+                print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                print(contacts)
+                print(res_values['res0'])
+                print(res_values['res1'])
+                writer.writerow([datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), contacts, res_values['res0'],
+                                 res_values['res1']])
+                #print(f"Recorded: {data}")
 
         clock.tick(1000)
 
